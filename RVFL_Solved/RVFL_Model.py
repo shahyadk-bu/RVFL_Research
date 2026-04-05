@@ -245,6 +245,10 @@ class RVFL:
         void
     """
     def saveModel(self):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        save_dir = os.path.join(base_dir, "model_saves")
+        os.makedirs(save_dir, exist_ok=True)
+
         num_layers = len(self.layersInfo)
         layer_dims = "-".join(str(layer["layer_dim"]) for layer in self.layersInfo)
         scales = "-".join(str(scale) for scale in self.scalings)
@@ -258,7 +262,7 @@ class RVFL:
             f"_scales-{scales}.pt"
         )
 
-        path = os.path.join("model_saves", filename)
+        path = os.path.join(save_dir, filename)
         torch.save(self, path)
         print("Model saved to path: " + path)
     

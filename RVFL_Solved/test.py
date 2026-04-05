@@ -13,6 +13,24 @@ layersInfo = [
         "bias_switch": True,
         "bias_dist": "normal",
         "bias_var": 1.0
+    },
+    {
+        "layer_dim": 50,
+        "weight_dist": "normal",
+        "weight_var": 1.0,
+        "gamma_k": None,
+        "bias_switch": True,
+        "bias_dist": "normal",
+        "bias_var": 1.0
+    },
+    {
+        "layer_dim": 25,
+        "weight_dist": "normal",
+        "weight_var": 1.0,
+        "gamma_k": None,
+        "bias_switch": True,
+        "bias_dist": "normal",
+        "bias_var": 1.0
     }
 ]
 
@@ -22,7 +40,7 @@ generalInfo = {
     "dtype": torch.float64
 }
 
-scalings = [1]
+scalings = [0.5, 0.5, 0.5]
 
 
 model = RVFL(
@@ -43,3 +61,5 @@ model.MNIST_fit(X_train, y_train)
 
 test_preds = model.predict(X_test)
 print("Test accuracy:", accuracy(test_preds, y_test_labels))
+
+model.saveModel()
