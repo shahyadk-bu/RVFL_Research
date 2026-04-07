@@ -57,7 +57,7 @@ X_train, y_train, X_test, y_test, y_train_labels, y_test_labels = load_mnist_ten
     dtype=generalInfo["dtype"]
 )
 
-model.MNIST_fit(X_train, y_train)
+model.fit(X_train, y_train)
 
 test_preds = model.predict(X_test)
 print("Test accuracy:", accuracy(test_preds, y_test_labels))

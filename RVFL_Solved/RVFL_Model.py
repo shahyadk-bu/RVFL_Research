@@ -3,6 +3,8 @@ import torch
 from typing import Optional
 from Internal_Layers import hidden_layer
 
+# Personal Note to create some get functins for general Info, layer Info, etc.
+
 class RVFL:
     """
     Inputs:
@@ -210,7 +212,7 @@ class RVFL:
     Outputs: 
         void
     """
-    def MNIST_fit(self, X_train, y_train):
+    def fit(self, X_train, y_train):
         self.input_dim = X_train.shape[1]
 
         if not self.internal_layers:
@@ -229,7 +231,7 @@ class RVFL:
     """
     def predict(self, X):
         if self.beta is None:
-            raise ValueError("Model has not been fit yet.")
+            raise ValueError("Model has not been fit to our data yet, run fit().")
         
         with torch.no_grad():
             Phi = self.forward(X)
@@ -249,20 +251,41 @@ class RVFL:
         save_dir = os.path.join(base_dir, "model_saves")
         os.makedirs(save_dir, exist_ok=True)
 
-        num_layers = len(self.layersInfo)
         layer_dims = "-".join(str(layer["layer_dim"]) for layer in self.layersInfo)
+        weight_dists = "-".join(str(layer["weight_dist"]) for layer in self.layersInfo)
+        weight_vars = "-".join(str(layer["weight_var"]) for layer in self.layersInfo)
+        bias_switches = "-".join(str(layer["bias_switch"]) for layer in self.layersInfo)
+        bias_dists = "-".join(str(layer["bias_dist"]) for layer in self.layersInfo)
+        bias_vars = "-".join(str(layer["bias_var"]) for layer in self.layersInfo)
         scales = "-".join(str(scale) for scale in self.scalings)
 
         filename = (
-            f"RVFL_act-{self.activation}"
-            f"_link-{self.linkOption}"
-            f"_lam-{self.lamb:.0e}"
-            f"_L-{num_layers}"
-            f"_dims-{layer_dims}"
-            f"_scales-{scales}.pt"
-        )
+        f"RVFL"
+        f"_seed-{self.seed}"
+        f"_act-{self.activation}"
+        f"_link-{self.linkOption}"
+        f"_lam-{self.lamb:.0e}"
+        f"_dims-{layer_dims}"
+        f"_wdist-{weight_dists}"
+        f"_wvar-{weight_vars}"
+        f"_bias-{bias_switches}"
+        f"_bdist-{bias_dists}"
+        f"_bvar-{bias_vars}"
+        f"_scale-{scales}"
+    )
+        
+        # Only include gamma_k info if gamma distribution is actually used
+        if any(layer["weight_dist"] == "gamma" for layer in self.layersInfo):
+            gamma_ks = "-".join(
+                str(layer["gamma_k"]) if layer["weight_dist"] == "gamma" else "NA"
+                for layer in self.layersInfo
+            )
+            filename += f"_gk-{gamma_ks}"
+
+        filename += ".pt"
 
         path = os.path.join(save_dir, filename)
         torch.save(self, path)
         print("Model saved to path: " + path)
+        return filename
     
