@@ -119,22 +119,7 @@ def main():
                 train_acc = accuracy(train_preds, y_train_labels)
                 test_acc = accuracy(test_preds, y_test_labels)
 
-                model.saveModel()
-
-                model_filename = (
-                    f"RVFL"
-                    f"_seed-{seed}"
-                    f"_act-{activation}"
-                    f"_link-{linkOption}"
-                    f"_lam-{lamb:.0e}"
-                    f"_dims-{layer_dim}"
-                    f"_wdist-{weight_dist}"
-                    f"_wvar-{weight_var}"
-                    f"_bias-{bias_switch}"
-                    f"_bdist-{bias_dist}"
-                    f"_bvar-{bias_var}"
-                    f"_scale-{scaling}.pt"
-                )
+                model_filename = model.saveModel()
 
                 row = {
                     "status": "success",

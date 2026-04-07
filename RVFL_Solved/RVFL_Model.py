@@ -285,7 +285,55 @@ class RVFL:
         filename += ".pt"
 
         path = os.path.join(save_dir, filename)
-        torch.save(self, path)
+        torch.save({
+            "layersInfo": self.layersInfo,
+            "activation": self.activation,
+            "linkOption": self.linkOption,
+            "lamb": self.lamb,
+            "scalings": self.scalings,
+            "seed": self.seed,
+            "device": self.device,
+            "dtype": self.dtype,
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
+            "internal_layers": self.internal_layers,
+            "beta": self.beta
+        }, path)
+
         print("Model saved to path: " + path)
         return filename
+
+    """
+    This function is used to load in the saved data easily with the new dict save format.
+
+    Input:
+        string path: Path to the model data you wish to load in
+    Output:
+        RVFL model: The loaded in RVFL object.
+    """
+    @classmethod
+    def loadModel(cls, path):
+        loadedModelDict = torch.load(path)
+
+        generalInfo = {
+            "seed": loadedModelDict["seed"],
+            "device": loadedModelDict["device"],
+            "dtype": loadedModelDict["dtype"]
+        }
+
+        model = cls(
+            layersInfo=loadedModelDict["layersInfo"],
+            generalInfo=generalInfo,
+            activation=loadedModelDict["activation"],
+            linkOption=loadedModelDict["linkOption"],
+            lamb=loadedModelDict["lamb"],
+            scalings=loadedModelDict["scalings"]
+        )
+
+        model.input_dim = loadedModelDict["input_dim"]
+        model.output_dim = loadedModelDict["output_dim"]
+        model.internal_layers = loadedModelDict["internal_layers"]
+        model.beta = loadedModelDict["beta"]
+
+        return model
     

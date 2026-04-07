@@ -1,5 +1,5 @@
 import torch
-from typing import Optional
+from typing import Optional, Tuple
 
 """
 This function will generate one internal hidden layer.
@@ -72,7 +72,7 @@ Inputs:
 Outputs:
     tensor g: A randomly sampled tensor according to inputs
 """
-def sample_matrix(shape: tuple[int, ...], 
+def sample_matrix(shape: Tuple[int, ...], 
                   dist: str, 
                   var: float, 
                   *,
