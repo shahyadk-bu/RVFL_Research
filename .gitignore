@@ -1,5 +1,10 @@
-# Test results
-Unitary_Model/unitary_test_results/
+# Python cache
+__pycache__/
+*.pyc
 
-# Plotting scripts
-Unitary_Model/writeUpPlotTests.py
+# Test results
+Unitary_Model\Unitary_Model_TestResults
+unitary_test_results
+
+# Plotting script
+Unitary_Model\writeUpPlotTests.py
