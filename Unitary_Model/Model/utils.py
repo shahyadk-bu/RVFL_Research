@@ -112,6 +112,11 @@ def load_cifar10_tensors(
         X_train, y_train, X_test, y_test,
         input_dim, output_dim, task
     """
+    # Use faster CIFAR10 mirror because the default Toronto URL can be very slow/unreachable.
+    datasets.CIFAR10.url = "https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz"
+    datasets.CIFAR10.filename = "cifar-10-python.tar.gz"
+    datasets.CIFAR10.tgz_md5 = "c58f30108f718f92721af3b95e74349a"
+
     transform = transforms.ToTensor()
 
     train_data = datasets.CIFAR10(

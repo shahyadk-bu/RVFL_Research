@@ -23,3 +23,12 @@ Unitary_Model/test.py
 Unitary_Model/testwhatsslow.py
 Unitary_Model/writeUpPlotTests.py
 Unitary_Model/plot_profile_results.py
+
+# Benchmark generated files
+benchmarking/smokeTest.py
+benchmark_results/
+slurm-*.out
+
+# Dataset downloads
+data/
+RVFL_Research/data/
