@@ -2,9 +2,18 @@
 __pycache__/
 *.pyc
 
+# Data
+data
+results
+
+# Old Models, no longer being tested with
+RVFL_Solved
+RVFL_Trained
+
 # Test results
 Unitary_Model\Unitary_Model_TestResults
 unitary_test_results
 
 # Plotting script
 Unitary_Model\writeUpPlotTests.py
+Unitary_Model\plot_profile_results.py
