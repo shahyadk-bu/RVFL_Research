@@ -1,0 +1,4 @@
+width,target_acc,hit_target_epoch,hit_target_time,final_acc,final_loss,total_training_time,history_file
+50,0.9,32,2.9823482036590576,0.9635166525840759,0.1259000152349472,14.022603988647461,Regular_Neural_Network/standard_nn_target_results_lr3e-2\width50_target90_history.csv
+150,0.94,39,6.666820526123047,0.9844499826431274,0.056365497410297394,31.532131910324097,Regular_Neural_Network/standard_nn_target_results_lr3e-2\width150_target94_history.csv
+250,0.96,60,19.50384521484375,0.9872833490371704,0.047149915248155594,53.150065183639526,Regular_Neural_Network/standard_nn_target_results_lr3e-2\width250_target96_history.csv

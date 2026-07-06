@@ -2,18 +2,24 @@
 __pycache__/
 *.pyc
 
-# Data
-data
-results
+# Data / generated results
+data/
+results/
+unitary_test_results/
+unitary_width_epoch_tradeoff/
+unitary_lr_sweep_results/
 
-# Old Models, no longer being tested with
-RVFL_Solved
-RVFL_Trained
+# Old models, no longer being tested with
+RVFL_Solved/
+RVFL_Trained/
 
-# Test results
-Unitary_Model\Unitary_Model_TestResults
-unitary_test_results
+# Generated outputs inside Unitary_Model
+Unitary_Model/Unitary_Model_TestResults/
+Unitary_Model/plot_profile_results/
+Unitary_Model/updated_speed_results/
 
-# Plotting script
-Unitary_Model\writeUpPlotTests.py
-Unitary_Model\plot_profile_results.py
+# Temporary/local test scripts
+Unitary_Model/test.py
+Unitary_Model/testwhatsslow.py
+Unitary_Model/writeUpPlotTests.py
+Unitary_Model/plot_profile_results.py

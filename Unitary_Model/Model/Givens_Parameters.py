@@ -10,13 +10,12 @@ Outputs:
     list pairs: List of pairings as can be seen here: [(i1,j1), (i2,j2), ...]
 """
 def generate_pairs(m):
-
     pairs = []
 
     for i in range(m):
         for j in range(i + 1, m):
             pairs.append((i, j))
-    
+
     return pairs
 
 class GParameters(nn.Module):

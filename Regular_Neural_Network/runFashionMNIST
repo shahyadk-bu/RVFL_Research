@@ -1,0 +1,318 @@
+import os
+import csv
+import time
+
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+
+from model import NeuralNetwork
+from utils import load_fashion_mnist_tensors
+
+
+# ======================================================================================
+# Configuration
+# ======================================================================================
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DTYPE = torch.float32
+
+WIDTHS = [50, 150, 250]
+EPOCHS = 150
+LR = 3e-2
+SEED = 0
+NORMALIZE = "standardize"
+
+SAVE_DIR = "Regular_Neural_Network/fashion_mnist_width_sweep"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+
+# ======================================================================================
+# Helpers
+# ======================================================================================
+
+def accuracy(model, X, y_labels):
+    model.eval()
+
+    with torch.no_grad():
+        logits = model(X)
+        preds = torch.argmax(logits, dim=1)
+        return (preds == y_labels).float().mean().item()
+
+
+def save_history_csv(history, filepath):
+    keys = list(history.keys())
+
+    with open(filepath, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(keys)
+
+        for i in range(len(history[keys[0]])):
+            writer.writerow([history[k][i] for k in keys])
+
+
+def train_standard_nn(
+    model,
+    X_train,
+    y_train_labels,
+    X_test,
+    y_test_labels,
+    epochs,
+    lr,
+):
+    loss_func = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    history = {
+        "epoch": [],
+        "train_loss": [],
+        "train_acc": [],
+        "test_loss": [],
+        "test_acc": [],
+        "epoch_time": [],
+        "cumulative_time": [],
+    }
+
+    training_start = time.time()
+
+    for epoch in range(epochs):
+        epoch_start = time.time()
+
+        model.train()
+        optimizer.zero_grad(set_to_none=True)
+
+        logits = model(X_train)
+        loss = loss_func(logits, y_train_labels)
+
+        loss.backward()
+        optimizer.step()
+
+        with torch.no_grad():
+            train_acc = accuracy(model, X_train, y_train_labels)
+
+            test_logits = model(X_test)
+            test_loss = loss_func(test_logits, y_test_labels).item()
+            test_preds = torch.argmax(test_logits, dim=1)
+            test_acc = (test_preds == y_test_labels).float().mean().item()
+
+        epoch_time = time.time() - epoch_start
+        cumulative_time = time.time() - training_start
+
+        history["epoch"].append(epoch + 1)
+        history["train_loss"].append(loss.item())
+        history["train_acc"].append(train_acc)
+        history["test_loss"].append(test_loss)
+        history["test_acc"].append(test_acc)
+        history["epoch_time"].append(epoch_time)
+        history["cumulative_time"].append(cumulative_time)
+
+        print(
+            f"Epoch {epoch + 1}/{epochs} | "
+            f"train_loss={loss.item():.6f} | "
+            f"train_acc={train_acc:.4f} | "
+            f"test_loss={test_loss:.6f} | "
+            f"test_acc={test_acc:.4f} | "
+            f"epoch_time={epoch_time:.2f}s | "
+            f"total_time={cumulative_time:.2f}s"
+        )
+
+    summary = {
+        "total_training_time": history["cumulative_time"][-1],
+        "final_train_loss": history["train_loss"][-1],
+        "final_train_acc": history["train_acc"][-1],
+        "final_test_loss": history["test_loss"][-1],
+        "final_test_acc": history["test_acc"][-1],
+        "avg_epoch_time": sum(history["epoch_time"]) / len(history["epoch_time"]),
+    }
+
+    return history, summary
+
+
+def plot_metric(history, width, metric_key, ylabel, title, filepath):
+    epochs = history["epoch"]
+    values = history[metric_key]
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, values, marker="o")
+    plt.xlabel("Epoch")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=200)
+    plt.close()
+
+
+def plot_combined(histories_by_width, metric_key, ylabel, title, filepath):
+    plt.figure(figsize=(8, 5))
+
+    for width, history in histories_by_width.items():
+        plt.plot(
+            history["epoch"],
+            history[metric_key],
+            marker="o",
+            label=f"width={width}",
+        )
+
+    plt.xlabel("Epoch")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=200)
+    plt.close()
+
+
+# ======================================================================================
+# Main
+# ======================================================================================
+
+def main():
+    torch.manual_seed(SEED)
+
+    print(f"Device: {DEVICE}")
+    print(f"Dtype: {DTYPE}")
+
+    data = load_fashion_mnist_tensors(
+        device=DEVICE,
+        dtype=DTYPE,
+        normalize=NORMALIZE,
+    )
+
+    X_train = data["X_train"]
+    y_train_labels = data["y_train"]
+    X_test = data["X_test"]
+    y_test_labels = data["y_test"]
+
+    input_size = data["input_dim"]
+    output_size = data["output_dim"]
+
+    print(f"X_train shape: {tuple(X_train.shape)}")
+    print(f"y_train shape: {tuple(y_train_labels.shape)}")
+    print(f"X_test shape: {tuple(X_test.shape)}")
+    print(f"y_test shape: {tuple(y_test_labels.shape)}")
+    print(f"input_size: {input_size}")
+    print(f"output_size: {output_size}")
+
+    summaries = []
+    histories_by_width = {}
+
+    for width in WIDTHS:
+        print("\n" + "=" * 80)
+        print(f"Running standard NN on FashionMNIST | width={width}")
+        print("=" * 80)
+
+        model = NeuralNetwork(
+            layer_sizes=[input_size, width, output_size],
+            activation=torch.relu,
+        ).to(DEVICE)
+
+        history, summary = train_standard_nn(
+            model=model,
+            X_train=X_train,
+            y_train_labels=y_train_labels,
+            X_test=X_test,
+            y_test_labels=y_test_labels,
+            epochs=EPOCHS,
+            lr=LR,
+        )
+
+        histories_by_width[width] = history
+
+        history_path = os.path.join(SAVE_DIR, f"width{width}_history.csv")
+        save_history_csv(history, history_path)
+
+        plot_metric(
+            history,
+            width,
+            "train_acc",
+            "Train accuracy",
+            f"FashionMNIST standard NN train accuracy | width={width}",
+            os.path.join(SAVE_DIR, f"width{width}_train_accuracy.png"),
+        )
+
+        plot_metric(
+            history,
+            width,
+            "test_acc",
+            "Test accuracy",
+            f"FashionMNIST standard NN test accuracy | width={width}",
+            os.path.join(SAVE_DIR, f"width{width}_test_accuracy.png"),
+        )
+
+        plot_metric(
+            history,
+            width,
+            "epoch_time",
+            "Epoch time (seconds)",
+            f"FashionMNIST standard NN epoch time | width={width}",
+            os.path.join(SAVE_DIR, f"width{width}_epoch_time.png"),
+        )
+
+        plot_metric(
+            history,
+            width,
+            "cumulative_time",
+            "Cumulative time (seconds)",
+            f"FashionMNIST standard NN cumulative time | width={width}",
+            os.path.join(SAVE_DIR, f"width{width}_cumulative_time.png"),
+        )
+
+        summary_row = {
+            "width": width,
+            "epochs": EPOCHS,
+            "lr": LR,
+            "normalize": NORMALIZE,
+            "device": DEVICE,
+            "dtype": str(DTYPE),
+            "total_training_time": summary["total_training_time"],
+            "avg_epoch_time": summary["avg_epoch_time"],
+            "final_train_loss": summary["final_train_loss"],
+            "final_train_acc": summary["final_train_acc"],
+            "final_test_loss": summary["final_test_loss"],
+            "final_test_acc": summary["final_test_acc"],
+            "history_file": history_path,
+        }
+
+        summaries.append(summary_row)
+
+    summary_path = os.path.join(SAVE_DIR, "summary.csv")
+
+    with open(summary_path, "w", newline="") as f:
+        fieldnames = list(summaries[0].keys())
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(summaries)
+
+    plot_combined(
+        histories_by_width,
+        "test_acc",
+        "Test accuracy",
+        "FashionMNIST standard NN test accuracy by width",
+        os.path.join(SAVE_DIR, "combined_test_accuracy_by_width.png"),
+    )
+
+    plot_combined(
+        histories_by_width,
+        "train_acc",
+        "Train accuracy",
+        "FashionMNIST standard NN train accuracy by width",
+        os.path.join(SAVE_DIR, "combined_train_accuracy_by_width.png"),
+    )
+
+    plot_combined(
+        histories_by_width,
+        "cumulative_time",
+        "Cumulative time (seconds)",
+        "FashionMNIST standard NN cumulative time by width",
+        os.path.join(SAVE_DIR, "combined_cumulative_time_by_width.png"),
+    )
+
+    print("\nFinished all standard NN FashionMNIST experiments.")
+    print(f"Results saved to: {SAVE_DIR}")
+    print(f"Summary saved to: {summary_path}")
+
+
+if __name__ == "__main__":
+    main()

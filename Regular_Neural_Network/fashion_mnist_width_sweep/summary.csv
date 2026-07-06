@@ -1,0 +1,4 @@
+width,epochs,lr,normalize,device,dtype,total_training_time,avg_epoch_time,final_train_loss,final_train_acc,final_test_loss,final_test_acc,history_file
+50,150,0.03,standardize,cpu,torch.float32,14.8746657371521,0.09901634057362875,0.22761477530002594,0.9193833470344543,0.3643791079521179,0.8763999938964844,Regular_Neural_Network/fashion_mnist_width_sweep\width50_history.csv
+150,150,0.03,standardize,cpu,torch.float32,44.004112243652344,0.29315423488616943,0.24847404658794403,0.9116833209991455,0.3892468810081482,0.8740000128746033,Regular_Neural_Network/fashion_mnist_width_sweep\width150_history.csv
+250,150,0.03,standardize,cpu,torch.float32,84.29035544395447,0.5617285124460856,0.18756476044654846,0.9298666715621948,0.4045298993587494,0.8792999982833862,Regular_Neural_Network/fashion_mnist_width_sweep\width250_history.csv

@@ -1,0 +1,42 @@
+Profile Plot Report
+================================================================================
+
+Width 50
+--------------------------------------------------------------------------------
+First epoch train acc:       0.8829
+Final epoch train acc:       0.9041
+Training accuracy gain:      0.0212
+Cumulative epoch time:       8.3707s
+Average epoch time:          0.4185s
+Average backward time:       0.0319s
+Accuracy gain per second:    0.002531
+Final orthogonality error:   2.071550e-06
+
+Width 150
+--------------------------------------------------------------------------------
+First epoch train acc:       0.9039
+Final epoch train acc:       0.9452
+Training accuracy gain:      0.0413
+Cumulative epoch time:       12.8895s
+Average epoch time:          0.6445s
+Average backward time:       0.0516s
+Accuracy gain per second:    0.003202
+Final orthogonality error:   4.799834e-06
+
+Width 250
+--------------------------------------------------------------------------------
+First epoch train acc:       0.9205
+Final epoch train acc:       0.9643
+Training accuracy gain:      0.0438
+Cumulative epoch time:       15.3056s
+Average epoch time:          0.7653s
+Average backward time:       0.0755s
+Accuracy gain per second:    0.002862
+Final orthogonality error:   7.577869e-06
+
+Summary CSV
+================================================================================
+ width  epochs   lr  precompute_time  total_train_time_before_final_beta  final_beta_time  total_train_time_with_final_beta  avg_epoch_time  first_epoch_time  last_epoch_time  final_train_loss  final_train_acc  num_epochs  avg_forward_time  avg_solve_beta_time  avg_pred_loss_time  avg_backward_time  avg_optimizer_time  avg_other_time  forward_pct  solve_beta_pct  pred_loss_pct  backward_pct  optimizer_pct  other_pct  test_loss  test_acc  eval_time    Q_norm  orth_error  theta_norm         dtype device
+    50      20 0.02         0.038914                            8.415219         0.466867                          8.882086        0.418535          0.738940         0.546601          0.027887         0.904100          20          0.029444             0.333626            0.015377           0.031933            0.005065        0.003089     7.034907       79.712942       3.674040      7.629812       1.210259   0.738039   0.031914    0.9050   0.030062  7.071067    0.000002         NaN torch.float32    cpu
+   150      20 0.02         0.078749                           12.976313         0.577915                         13.554228        0.644474          0.677154         0.641174          0.016394         0.945167          20          0.046468             0.517891            0.022736           0.051584            0.003248        0.002547     7.210286       80.358676       3.527873      8.004032       0.503960   0.395173   0.233365    0.9415   0.032632 12.247446    0.000005         NaN torch.float32    cpu
+   250      20 0.02         0.128740                           15.441576         0.750870                         16.192445        0.765278          0.895381         0.761194          0.012891         0.964350          20          0.070212             0.590510            0.022047           0.075451            0.004634        0.002424     9.174722       77.162789       2.880940      9.859246       0.605522   0.316781   0.014016    0.9591   0.039911 15.811387    0.000008         NaN torch.float32    cpu

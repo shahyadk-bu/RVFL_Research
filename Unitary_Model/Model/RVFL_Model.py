@@ -1,8 +1,9 @@
 import os
 import torch
 from typing import Optional
-from Internal_Layers import hidden_layer
-from Givens_Parameters import GParameters
+from RVFL_Research.Unitary_Model.Model.Internal_Layers import hidden_layer
+from RVFL_Research.Unitary_Model.Model.Givens_Parameters import GParameters
+from RVFL_Research.Unitary_Model.Model.OrthogonalParams import OrthogonalParameters
 import torch.nn as nn
 import torch.nn.functional as F
 import time
@@ -24,6 +25,7 @@ class RVFL(nn.Module):
             bool bias_switch: switch for having or not having bias terms
             str bias_dist: the distribution for the bias terms
             float bias_var: the variance of the bias distribution
+            unitary_init: the inital unitary state before training
             }
 
         Dict GeneralInfo: a dict holding info about seed, device, and data type as follows:
@@ -44,7 +46,19 @@ class RVFL(nn.Module):
             and bias terms {W: _, b: _}
         Tensor beta: the solved layer(s) 
     """
-    def __init__(self, layersInfo, generalInfo, activation, linkOption, lamb, scalings):
+    def __init__(
+    self,
+    layersInfo,
+    generalInfo,
+    orthoMatMethod,
+    activation,
+    linkOption,
+    lamb,
+    scalings,
+    input_dim=None,
+    output_dim=None,
+    task="classification",
+    ):
         super().__init__()
 
         self.layersInfo = layersInfo
@@ -52,6 +66,7 @@ class RVFL(nn.Module):
         self.linkOption = linkOption
         self.lamb = lamb
         self.scalings = scalings
+        self.orthoMatMethod = orthoMatMethod
 
         if (len(self.scalings) != len(self.layersInfo)):
             raise IndexError("The number of scalings and number of layers are not equal.")
@@ -59,12 +74,16 @@ class RVFL(nn.Module):
         if self.linkOption not in {"none", "direct", "multi"}:
             raise ValueError(f"Invalid linkOption: {self.linkOption}")
 
+        if task not in {"classification", "regression"}:
+            raise ValueError("task must be 'classification' or 'regression'.")
+
         self.seed = generalInfo["seed"]
         self.device = generalInfo["device"]
         self.dtype = generalInfo["dtype"]
 
-        self.input_dim = 784 # This is temporairly hard coded for MNIST
-        self.output_dim = 10 # This is temporairly hard coded for MNIST
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.task = task
 
         # Initalize our generator for random numbers using our chosen seed
         self.generator = torch.Generator(device=self.device)
@@ -73,10 +92,159 @@ class RVFL(nn.Module):
         self.internal_layers = []
         self.beta = None
 
-        self.unitaryParams = nn.ModuleList([
-            GParameters(layer["layer_dim"], self.device, self.dtype)
-            for layer in layersInfo
-        ])
+        # Initalize the parameters for training
+        self.unitaryParams = nn.ModuleList([])
+
+        if self.orthoMatMethod not in {"givens", "qr"}:
+            raise ValueError(f"Invalid orthoMatMethod: {self.orthoMatMethod}")
+
+        for layer in layersInfo:
+
+            if self.orthoMatMethod == "givens":
+                self.unitaryParams.append(
+                    GParameters(
+                        layer["layer_dim"],
+                        self.device,
+                        self.dtype,
+                    )
+                )
+
+            elif self.orthoMatMethod == "qr":
+                self.unitaryParams.append(
+                    OrthogonalParameters(
+                        layer["layer_dim"],
+                        self.device,
+                        self.dtype,
+                        init=layer.get("unitary_init", "identity"),
+                        generator=self.generator,
+                    )
+                )
+
+        self.eye_cache = {}
+
+    """
+        Converts input data to a 2D tensor of shape (N, d).
+
+        This allows:
+            tabular data: (N, d)
+            single point: (d,)
+            images: (N, H, W) or (N, C, H, W)
+
+        Inputs:
+            Tensor X: Data
+    """
+    def _as_feature_tensor(self, X):
+        if torch.is_tensor(X):
+            X = X.to(device=self.device, dtype=self.dtype)
+        else:
+            X = torch.as_tensor(X, device=self.device, dtype=self.dtype)
+
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+        elif X.ndim > 2:
+            X = X.reshape(X.shape[0], -1)
+
+        if X.ndim != 2:
+            raise ValueError(f"Expected X to become shape (N, d), but got {tuple(X.shape)}.")
+
+        return X
+
+    def _set_or_check_input_dim(self, X):
+        input_dim = X.shape[1]
+
+        if self.input_dim is None:
+            self.input_dim = input_dim
+        elif self.input_dim != input_dim:
+            raise ValueError(
+                f"Expected input_dim={self.input_dim}, but got data with {input_dim} features."
+            )
+
+    def _prepare_targets(self, y, *, fit_output_dim=False):
+        """
+        For classification:
+            accepts integer labels of shape (N,)
+            or one-hot labels of shape (N, C)
+
+        For regression:
+            accepts targets of shape (N,) or (N, m)
+
+        Returns:
+            Y: target matrix used in ridge regression
+            labels: integer labels for accuracy, or None for regression
+        """
+        if torch.is_tensor(y):
+            y_tensor = y.to(device=self.device)
+        else:
+            y_tensor = torch.as_tensor(y, device=self.device)
+
+        if self.task == "classification":
+            if y_tensor.ndim == 1:
+                labels = y_tensor.to(dtype=torch.long)
+                inferred_output_dim = int(labels.max().item()) + 1
+
+                if fit_output_dim or self.output_dim is None:
+                    self.output_dim = inferred_output_dim
+                elif inferred_output_dim > self.output_dim:
+                    raise ValueError(
+                        f"Labels require at least {inferred_output_dim} classes, "
+                        f"but output_dim={self.output_dim}."
+                    )
+
+                Y = F.one_hot(labels, num_classes=self.output_dim).to(
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                return Y, labels
+
+            if y_tensor.ndim == 2:
+                Y = y_tensor.to(device=self.device, dtype=self.dtype)
+                labels = torch.argmax(Y, dim=1).to(dtype=torch.long)
+
+                if fit_output_dim or self.output_dim is None:
+                    self.output_dim = Y.shape[1]
+                elif Y.shape[1] != self.output_dim:
+                    raise ValueError(
+                        f"Expected y to have {self.output_dim} columns, got {Y.shape[1]}."
+                    )
+
+                return Y, labels
+
+            raise ValueError("Classification targets must have shape (N,) or (N, C).")
+
+        # Regression case
+        Y = y_tensor.to(device=self.device, dtype=self.dtype)
+
+        if Y.ndim == 1:
+            Y = Y.reshape(-1, 1)
+
+        if Y.ndim != 2:
+            raise ValueError("Regression targets must have shape (N,) or (N, m).")
+
+        if fit_output_dim or self.output_dim is None:
+            self.output_dim = Y.shape[1]
+        elif Y.shape[1] != self.output_dim:
+            raise ValueError(
+                f"Expected y to have {self.output_dim} columns, got {Y.shape[1]}."
+            )
+
+        return Y, None
+
+    """
+    Returns the cached identity matrix.
+
+    Inputs:
+        p: the dimension of the identity matrix (i.e. a p by p matrix)
+    Outputs:
+        self.eye_cache[p]: the identity matrix
+    """
+    def get_eye(self, p):
+        if p not in self.eye_cache:
+            self.eye_cache[p] = torch.eye(
+                p,
+                device=self.device,
+                dtype=self.dtype
+            )
+        return self.eye_cache[p]
 
     """
     This function creates the hidden layers of our RVFL.
@@ -86,11 +254,23 @@ class RVFL(nn.Module):
     Outputs:
         void
     """
-    def create_hidden_layers(self):
+    def create_hidden_layers(self, input_dim=None):
 
         if self.internal_layers:
             print("The internal layers have already been created.")
             return
+
+        if input_dim is not None:
+            if self.input_dim is not None and self.input_dim != input_dim:
+                raise ValueError(
+                    f"Model input_dim is already {self.input_dim}, cannot reset it to {input_dim}."
+                )
+            self.input_dim = input_dim
+
+        if self.input_dim is None:
+            raise ValueError(
+                "input_dim is unknown. Pass input_dim to RVFL(...)."
+            )
 
         # This is a changing variable which says what the last layers output dim is (aka the new layers input dim)
         input_dim = self.input_dim
@@ -136,17 +316,18 @@ class RVFL(nn.Module):
         
     """
     The actual model function. The data is input and runs forward throuh the RVFL and we get our output.
-    
-    Double check scalings implementation.
 
     Inputs:
         Tensor X: The input data
     Outputs:
         Torch RVFL(X): The output data
     """
-    def forward(self, X):
+    def forward(self, X, Z=None):
         if not self.internal_layers:
             raise RuntimeError("Hidden layers have not been made yet.")
+        
+        if (len(self.internal_layers) == 1) and Z is not None:
+            return self.forward_from_precomputed_XW(X, Z)
         
         H = X
 
@@ -157,8 +338,9 @@ class RVFL(nn.Module):
                 W = layer["W"]
                 b = layer["b"]
 
-                W_rotated = self.unitaryParams[i](W)
+                W_rotated = self.unitaryParams[i](W) # Calls the unitaryParams forward method which applied the rotation to W
                 H = H @ W_rotated
+
                 if b is not None:
                     H = H + b
 
@@ -176,8 +358,9 @@ class RVFL(nn.Module):
                 W = layer["W"]
                 b = layer["b"]
 
-                W_rotated = self.unitaryParams[i](W)
+                W_rotated = self.unitaryParams[i](W) # Calls the unitaryParams forward method which applied the rotation to W
                 H = H @ W_rotated
+                
                 if b is not None:
                     H = H + b
 
@@ -188,7 +371,52 @@ class RVFL(nn.Module):
                 return torch.cat([X, H], dim=1)
             else:
                 return H
-        
+
+    """
+    This function outputs X @ W so that we do not keep recomputing it each epoch in the one-layer case.
+
+    Inputs:
+        Tensor X: data
+    Outputs: 
+        Tensor Z: X @ W
+    """      
+    def precompute_one_layer_XW(self, X):
+        if len(self.internal_layers) != 1:
+            raise ValueError("precompute_one_layer_XW is only for one-layer models.")
+
+        W = self.internal_layers[0]["W"]
+
+        with torch.no_grad():
+            return X @ W
+
+    """
+    This is used in the forward function for the one-layer case using the precomputed XW.
+
+    Inputs:
+        Tensor X: data
+        Tensor Z: X @ W
+    Outputs: 
+        Tensor RVFL(X): Output data after forward through RVFL
+    """ 
+    def forward_from_precomputed_XW(self, X, Z):
+        layer = self.internal_layers[0]
+        b = layer["b"]
+
+        H = self.unitaryParams[0](Z)
+
+        if b is not None:
+            H = H + b
+
+        layer_dim = layer["W"].shape[1]
+        H = (1 / layer_dim**self.scalings[0]) * self.actFunc(H)
+
+        if self.linkOption in {"direct", "multi"}:
+            return torch.cat([X, H], dim=1)
+        elif self.linkOption == "none":
+            return H
+        else:
+            raise ValueError(f"Invalid linkOption: {self.linkOption}")
+
     """
     This function solves for our "trained" layers directly. This is called beta in our code and 
     is the direct links, and final layer to output (if there are any direct links).
@@ -205,13 +433,13 @@ class RVFL(nn.Module):
         N = Y.shape[0]   # Y is (N,m)
 
         if p <= N:
-            I_p = torch.eye(p, device=self.device, dtype=self.dtype)
+            I_p = self.get_eye(p)
             A = Phi.T @ Phi + self.lamb * I_p
             B = Phi.T @ Y
 
             return torch.linalg.solve(A, B) #This solves A @ Beta = B
         elif p > N:
-            I_N = torch.eye(N, device=self.device, dtype=self.dtype)
+            I_N = self.get_eye(N)
             A = Phi @ Phi.T + self.lamb * I_N
             B = Y
             Z = torch.linalg.solve(A, B)
@@ -238,13 +466,33 @@ class RVFL(nn.Module):
         void
     """
     def fit(self, X_train, y_train):
-        self.input_dim = X_train.shape[1]
+        X_train = self._as_feature_tensor(X_train)
+        self._set_or_check_input_dim(X_train)
+        Y_train, _ = self._prepare_targets(y_train, fit_output_dim=True)
+
+        if len(X_train) != len(Y_train):
+            raise ValueError(
+                f"X_train and y_train have different lengths: {len(X_train)} vs {len(Y_train)}."
+            )
 
         if not self.internal_layers:
             self.create_hidden_layers()
 
         Phi = self.forward(X_train)
-        self.set_beta(Phi, y_train)
+        self.set_beta(Phi, Y_train)
+
+        return self
+
+    def predict_scores(self, X):
+        if self.beta is None:
+            raise ValueError("Model has not been fit to data yet, run fit().")
+
+        X = self._as_feature_tensor(X)
+        self._set_or_check_input_dim(X)
+
+        with torch.no_grad():
+            Phi = self.forward(X)
+            return Phi @ self.beta
 
     """
     This function uses our model to predict the output for a single input. This is currently hard-coded for MNIST data.
@@ -254,14 +502,22 @@ class RVFL(nn.Module):
     Outputs:
         Tensor int score: The number which the model predicts 
     """
-    def predict(self, X):
-        if self.beta is None:
-            raise ValueError("Model has not been fit to our data yet, run fit().")
+    # def predict(self, X):
+    #     if self.beta is None:
+    #         raise ValueError("Model has not been fit to our data yet, run fit().")
         
-        with torch.no_grad():
-            Phi = self.forward(X)
-            scores = Phi @ self.beta
+    #     with torch.no_grad():
+    #         Phi = self.forward(X)
+    #         scores = Phi @ self.beta
+    #         return torch.argmax(scores, dim=1)
+
+    def predict(self, X):
+        scores = self.predict_scores(X)
+
+        if self.task == "classification":
             return torch.argmax(scores, dim=1)
+
+        return scores
     
     """
     This function finds the loss of our model.
@@ -291,18 +547,38 @@ class RVFL(nn.Module):
         float loss_val: The loss found from the loss functions
         accuracy: The accuracy of our model against true labels
     """
-    def evaluate(self, X, y_onehot, y_labels):
+    # def evaluate(self, X, y_onehot, y_labels):
+    #     if self.beta is None:
+    #         raise ValueError("Model has not been fit yet, self.beta is None.")
+
+    #     with torch.no_grad():
+    #         Phi = self.forward(X)
+    #         preds = Phi @ self.beta
+    #         loss_val = F.mse_loss(preds, y_onehot).item()
+    #         pred_labels = torch.argmax(preds, dim=1)
+    #         accuracy = (pred_labels == y_labels).double().mean().item()
+
+    #     return loss_val, accuracy
+
+    def evaluate(self, X, y):
         if self.beta is None:
             raise ValueError("Model has not been fit yet, self.beta is None.")
+
+        X = self._as_feature_tensor(X)
+        self._set_or_check_input_dim(X)
+        Y, labels = self._prepare_targets(y, fit_output_dim=False)
 
         with torch.no_grad():
             Phi = self.forward(X)
             preds = Phi @ self.beta
-            loss_val = F.mse_loss(preds, y_onehot).item()
-            pred_labels = torch.argmax(preds, dim=1)
-            accuracy = (pred_labels == y_labels).double().mean().item()
+            loss_val = F.mse_loss(preds, Y).item()
 
-        return loss_val, accuracy
+            if self.task == "classification":
+                pred_labels = torch.argmax(preds, dim=1)
+                accuracy = (pred_labels == labels).double().mean().item()
+                return loss_val, accuracy
+
+            return loss_val, None
 
     """
     This function saves the model to a .pt file.
@@ -443,8 +719,28 @@ class RVFL(nn.Module):
     epochs=50,
     lr=1e-3,
     printUpdates=True,
+    profile=False,
     ):
-        self.input_dim = X_train.shape[1]
+        X_train = self._as_feature_tensor(X_train)
+        self._set_or_check_input_dim(X_train)
+        y_train, inferred_train_labels = self._prepare_targets(y_train, fit_output_dim=True)
+
+        if y_train_labels is None:
+            y_train_labels = inferred_train_labels
+        elif y_train_labels is not None:
+            y_train_labels = torch.as_tensor(y_train_labels, device=self.device, dtype=torch.long)
+
+        if X_val is not None:
+            X_val = self._as_feature_tensor(X_val)
+            self._set_or_check_input_dim(X_val)
+
+        if y_val is not None:
+            y_val, inferred_val_labels = self._prepare_targets(y_val, fit_output_dim=False)
+
+            if y_val_labels is None:
+                y_val_labels = inferred_val_labels
+            elif y_val_labels is not None:
+                y_val_labels = torch.as_tensor(y_val_labels, device=self.device, dtype=torch.long)
 
         if not self.internal_layers:
             self.create_hidden_layers()
@@ -458,35 +754,70 @@ class RVFL(nn.Module):
             "val_acc": [],
             "epoch_time": [],
             "avg_epoch_time": [],
+
+            # profiling
+            "forward_time": [],
+            "solve_beta_time": [],
+            "pred_loss_time": [],
+            "backward_time": [],
+            "optimizer_time": [],
         }
 
         epoch_times = []
 
+        if len(self.internal_layers) == 1:
+            Z_train = self.precompute_one_layer_XW(X_train)
+            if X_val is not None:
+                Z_val = self.precompute_one_layer_XW(X_val)
+            else:
+                Z_val = None
+        else:
+            Z_train = None
+            Z_val = None
+
         for epoch in range(epochs):
             epoch_start = time.time()
             self.train()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
-            Phi = self.forward(X_train)
-            beta = self.solve_beta(Phi, y_train)
-            loss = self.loss(Phi, y_train, beta)
+           # Forward pass
+            t0 = time.time()
+            Phi = self.forward(X_train, Z_train)
+            forward_time = time.time() - t0
 
+            # Solve for Beta
+            with torch.no_grad():
+                t0 = time.time()
+                beta = self.solve_beta(Phi.detach(), y_train)
+                solve_beta_time = time.time() - t0
+
+            # Compute predictions and loss
+            t0 = time.time()
+            train_preds = Phi @ beta
+            loss = F.mse_loss(train_preds, y_train)
+            pred_loss_time = time.time() - t0
+
+            # Backprop
+            t0 = time.time()
             loss.backward()
+            backward_time = time.time() - t0
+
+            # Adam update
+            t0 = time.time()
             optimizer.step()
 
-            # Recompute and store the current fitted beta after the update
+            for U in self.unitaryParams:
+                if hasattr(U, "project"):
+                    U.project()
+
+            optimizer_time = time.time() - t0
+
+           # Record training metrics using beta from this epoch
             with torch.no_grad():
-                Phi_train = self.forward(X_train)
-                self.set_beta(Phi_train, y_train)
-
-                beta = self.beta
-                assert beta is not None
-
-                train_preds = Phi_train @ beta
-                train_loss = F.mse_loss(train_preds, y_train).item()
+                train_loss = loss.item()
                 history["train_loss"].append(train_loss)
 
-                if y_train_labels is not None:
+                if self.task == "classification" and y_train_labels is not None:
                     train_labels_pred = torch.argmax(train_preds, dim=1)
                     train_acc = (train_labels_pred == y_train_labels).double().mean().item()
                     history["train_acc"].append(train_acc)
@@ -494,12 +825,12 @@ class RVFL(nn.Module):
                     train_acc = None
 
                 if X_val is not None and y_val is not None:
-                    Phi_val = self.forward(X_val)
+                    Phi_val = self.forward(X_val, Z_val)
                     val_preds = Phi_val @ beta
                     val_loss = F.mse_loss(val_preds, y_val).item()
                     history["val_loss"].append(val_loss)
 
-                    if y_val_labels is not None:
+                    if self.task == "classification" and y_val_labels is not None:
                         val_labels_pred = torch.argmax(val_preds, dim=1)
                         val_acc = (val_labels_pred == y_val_labels).double().mean().item()
                         history["val_acc"].append(val_acc)
@@ -526,6 +857,11 @@ class RVFL(nn.Module):
                 )
             history["epoch_time"].append(epoch_time)
             history["avg_epoch_time"].append(avg_epoch_time)
+            history["forward_time"].append(forward_time)
+            history["solve_beta_time"].append(solve_beta_time)
+            history["pred_loss_time"].append(pred_loss_time)
+            history["backward_time"].append(backward_time)
+            history["optimizer_time"].append(optimizer_time)
 
             if printUpdates:
                 msg = f"Epoch {epoch+1}/{epochs} | train_loss={train_loss:.6f}"
@@ -536,5 +872,19 @@ class RVFL(nn.Module):
                 if val_acc is not None:
                     msg += f" | val_acc={val_acc:.4f}"
                 print(msg)
+
+                if profile:
+                    print(
+                        f"Profile | "
+                        f"forward={forward_time:.3f}s | "
+                        f"solve_beta={solve_beta_time:.3f}s | "
+                        f"pred_loss={pred_loss_time:.3f}s | "
+                        f"backward={backward_time:.3f}s | "
+                        f"optimizer={optimizer_time:.3f}s"
+                    )
+
+        with torch.no_grad():
+            Phi_final = self.forward(X_train, Z_train)
+            self.set_beta(Phi_final, y_train)
 
         return history
