@@ -16,13 +16,12 @@ def main():
 
     # Same LR sweep for both standard NN and RVFL.
     lr_options = [
-        (1e-5, "lr_1e-5"),
-        (3e-5, "lr_3e-5"),
-        (1e-4, "lr_1e-4"),
-        (3e-4, "lr_3e-4"),
         (1e-3, "lr_1e-3"),
         (2e-3, "lr_2e-3"),
         (3e-3, "lr_2e-3"),
+        (1e-2, "lr_2e-3"),
+        (2e-2, "lr_2e-3"),
+        (3e-2, "lr_2e-3"),
     ]
 
     buckets = {
