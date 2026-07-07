@@ -308,7 +308,7 @@ def train_rvfl_profiled(
     """
     RVFL benchmark.
 
-    This DOES record detailed timing:
+    Timing columns:
         forward_time
         solve_beta_time
         pred_loss_time
@@ -317,7 +317,8 @@ def train_rvfl_profiled(
         eval_time
         other_time
 
-    These are used for the RVFL timing breakdown bar plots.
+    Accuracy/loss are evaluated using the same beta solved before the optimizer step.
+    This keeps exactly one beta solve per epoch.
     """
 
     total_start = time.time()
@@ -387,14 +388,14 @@ def train_rvfl_profiled(
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        # Forward: build design matrix Phi.
+        # Training forward.
         sync_if_cuda(device)
         t0 = time.time()
         Phi = model.forward(X_train, Z_train)
         sync_if_cuda(device)
         forward_time = time.time() - t0
 
-        # Solve beta.
+        # Solve beta for the current Q.
         sync_if_cuda(device)
         t0 = time.time()
         with torch.no_grad():
@@ -402,25 +403,35 @@ def train_rvfl_profiled(
         sync_if_cuda(device)
         solve_beta_time = time.time() - t0
 
-        # Prediction and loss.
+        # Training loss for gradient step.
         sync_if_cuda(device)
         t0 = time.time()
-        train_scores = Phi @ beta
-        loss = F.mse_loss(train_scores, Y_train)
+        train_scores_for_grad = Phi @ beta
+        loss = F.mse_loss(train_scores_for_grad, Y_train)
         sync_if_cuda(device)
         pred_loss_time = time.time() - t0
 
-        # Evaluation using the current Phi and beta.
+        # Evaluate using the SAME beta already solved this epoch.
+        # No second beta solve.
         sync_if_cuda(device)
         t0 = time.time()
         with torch.no_grad():
             train_loss = loss.item()
-            train_acc = classification_accuracy_from_scores(train_scores, y_train_labels)
+            train_acc = classification_accuracy_from_scores(
+                train_scores_for_grad,
+                y_train_labels,
+            )
 
             Phi_test = model.forward(X_test, Z_test)
             test_scores = Phi_test @ beta
             test_loss = F.mse_loss(test_scores, Y_test).item()
-            test_acc = classification_accuracy_from_scores(test_scores, y_test_labels)
+            test_acc = classification_accuracy_from_scores(
+                test_scores,
+                y_test_labels,
+            )
+
+            model.beta = beta
+
         sync_if_cuda(device)
         eval_time = time.time() - t0
 
@@ -431,7 +442,7 @@ def train_rvfl_profiled(
         sync_if_cuda(device)
         backward_time = time.time() - t0
 
-        # Optimizer step and QR projection if using QR parameters.
+        # Optimizer step and projection.
         sync_if_cuda(device)
         t0 = time.time()
         optimizer.step()
@@ -497,33 +508,6 @@ def train_rvfl_profiled(
             f"other={other_time:.3f}s"
         )
 
-    # Final beta for the final projected Q.
-    sync_if_cuda(device)
-    final_eval_start = time.time()
-
-    with torch.no_grad():
-        Phi_final = model.forward(X_train, Z_train)
-        beta_final = model.solve_beta(Phi_final, Y_train)
-        model.beta = beta_final
-
-        train_scores_final = Phi_final @ beta_final
-        final_train_loss = F.mse_loss(train_scores_final, Y_train).item()
-        final_train_acc = classification_accuracy_from_scores(
-            train_scores_final,
-            y_train_labels,
-        )
-
-        Phi_test_final = model.forward(X_test, Z_test)
-        test_scores_final = Phi_test_final @ beta_final
-        final_test_loss = F.mse_loss(test_scores_final, Y_test).item()
-        final_test_acc = classification_accuracy_from_scores(
-            test_scores_final,
-            y_test_labels,
-        )
-
-    sync_if_cuda(device)
-    final_eval_time = time.time() - final_eval_start
-
     total_training_time = time.time() - total_start
 
     summary = {
@@ -534,11 +518,11 @@ def train_rvfl_profiled(
         "lambda": lamb,
         "ortho_method": ortho_method,
         "setup_time": setup_time,
-        "final_eval_time": final_eval_time,
-        "final_train_loss": final_train_loss,
-        "final_test_loss": final_test_loss,
-        "final_train_acc": final_train_acc,
-        "final_test_acc": final_test_acc,
+        "final_eval_time": 0.0,
+        "final_train_loss": history["train_loss"][-1],
+        "final_test_loss": history["test_loss"][-1],
+        "final_train_acc": history["train_acc"][-1],
+        "final_test_acc": history["test_acc"][-1],
         "avg_epoch_time": sum(history["epoch_time"]) / len(history["epoch_time"]),
         "total_training_time": total_training_time,
     }
