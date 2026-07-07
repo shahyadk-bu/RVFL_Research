@@ -308,17 +308,31 @@ def train_rvfl_profiled(
     """
     RVFL benchmark.
 
-    Timing columns:
-        forward_time
-        solve_beta_time
-        pred_loss_time
-        backward_time
-        optimizer_time
-        eval_time
-        other_time
+    Training step:
+        1. Build Phi for current Q.
+        2. Solve beta_train for current Q.
+        3. Compute loss with beta_train fixed.
+        4. Backprop through Q.
+        5. Optimizer step.
+        6. QR projection.
 
-    Accuracy/loss are evaluated using the same beta solved before the optimizer step.
-    This keeps exactly one beta solve per epoch.
+    Evaluation:
+        After the optimizer step and projection, solve beta_eval again.
+        This beta_eval is used only for post-update train/test loss and accuracy.
+
+    Main timing columns:
+        epoch_time:
+            Full wall-clock benchmark epoch time, including post-update evaluation.
+
+        train_step_time:
+            Wall-clock epoch time excluding evaluation-only work.
+            This is the fair "training step" time.
+
+        eval_total_time:
+            Time spent only for post-update evaluation.
+
+        eval_solve_beta_time:
+            Time spent on the second beta solve, used only for reporting accuracy.
     """
 
     total_start = time.time()
@@ -359,7 +373,8 @@ def train_rvfl_profiled(
     sync_if_cuda(device)
     setup_time = time.time() - setup_start
 
-    optimizer = torch.optim.Adam(model.unitaryParams.parameters(), lr=lr)
+    unitary_params = list(model.unitaryParams.parameters())
+    optimizer = torch.optim.Adam(unitary_params, lr=lr)
 
     history = {
         "epoch": [],
@@ -367,19 +382,40 @@ def train_rvfl_profiled(
         "train_acc": [],
         "test_loss": [],
         "test_acc": [],
+
+        # Wall-clock epoch views.
         "epoch_time": [],
         "avg_epoch_time": [],
+        "train_step_time": [],
+        "avg_train_step_time": [],
+        "eval_total_time": [],
+        "avg_eval_total_time": [],
         "total_elapsed_time": [],
+
+        # Training-step timings.
+        "train_forward_time": [],
+        "train_solve_beta_time": [],
+        "train_pred_loss_time": [],
+        "backward_time": [],
+        "optimizer_time": [],
+        "train_other_time": [],
+
+        # Evaluation-only timings.
+        "eval_forward_time": [],
+        "eval_solve_beta_time": [],
+        "eval_pred_time": [],
+
+        # Backward-compatible aliases for old plotting code.
         "forward_time": [],
         "solve_beta_time": [],
         "pred_loss_time": [],
-        "backward_time": [],
-        "optimizer_time": [],
         "eval_time": [],
         "other_time": [],
     }
 
     epoch_times = []
+    train_step_times = []
+    eval_total_times = []
 
     for epoch in range(1, epochs + 1):
         sync_if_cuda(device)
@@ -388,63 +424,53 @@ def train_rvfl_profiled(
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        # Training forward.
+        # ------------------------------------------------------------
+        # 1. Training forward for current Q.
+        # ------------------------------------------------------------
         sync_if_cuda(device)
         t0 = time.time()
-        Phi = model.forward(X_train, Z_train)
+        Phi_train = model.forward(X_train, Z_train)
         sync_if_cuda(device)
-        forward_time = time.time() - t0
+        train_forward_time = time.time() - t0
 
-        # Solve beta for the current Q.
+        # ------------------------------------------------------------
+        # 2. Solve beta for current Q.
+        # beta_train is fixed for the gradient step.
+        # ------------------------------------------------------------
         sync_if_cuda(device)
         t0 = time.time()
         with torch.no_grad():
-            beta = model.solve_beta(Phi.detach(), Y_train)
+            beta_train = model.solve_beta(Phi_train.detach(), Y_train)
         sync_if_cuda(device)
-        solve_beta_time = time.time() - t0
+        train_solve_beta_time = time.time() - t0
 
-        # Training loss for gradient step.
+        # ------------------------------------------------------------
+        # 3. Training loss for gradient step.
+        # ------------------------------------------------------------
         sync_if_cuda(device)
         t0 = time.time()
-        train_scores_for_grad = Phi @ beta
+        train_scores_for_grad = Phi_train @ beta_train
         loss = F.mse_loss(train_scores_for_grad, Y_train)
         sync_if_cuda(device)
-        pred_loss_time = time.time() - t0
+        train_pred_loss_time = time.time() - t0
 
-        # Evaluate using the SAME beta already solved this epoch.
-        # No second beta solve.
+        # ------------------------------------------------------------
+        # 4. Backprop through Q.
+        # ------------------------------------------------------------
         sync_if_cuda(device)
         t0 = time.time()
-        with torch.no_grad():
-            train_loss = loss.item()
-            train_acc = classification_accuracy_from_scores(
-                train_scores_for_grad,
-                y_train_labels,
-            )
 
-            Phi_test = model.forward(X_test, Z_test)
-            test_scores = Phi_test @ beta
-            test_loss = F.mse_loss(test_scores, Y_test).item()
-            test_acc = classification_accuracy_from_scores(
-                test_scores,
-                y_test_labels,
-            )
-
-            model.beta = beta
-
-        sync_if_cuda(device)
-        eval_time = time.time() - t0
-
-        # Backprop.
-        sync_if_cuda(device)
-        t0 = time.time()
         loss.backward()
+
         sync_if_cuda(device)
         backward_time = time.time() - t0
 
-        # Optimizer step and projection.
+        # ------------------------------------------------------------
+        # 5. Optimizer step + QR projection.
+        # ------------------------------------------------------------
         sync_if_cuda(device)
         t0 = time.time()
+
         optimizer.step()
 
         for U in model.unitaryParams:
@@ -454,38 +480,127 @@ def train_rvfl_profiled(
         sync_if_cuda(device)
         optimizer_time = time.time() - t0
 
+        # ------------------------------------------------------------
+        # 6. Post-update evaluation.
+        #
+        # This is evaluation-only. It gives correct accuracy after
+        # optimizer.step() and QR projection.
+        # ------------------------------------------------------------
+        model.eval()
+
+        sync_if_cuda(device)
+        eval_start = time.time()
+
+        with torch.no_grad():
+            # Forward pass for updated/projected Q.
+            sync_if_cuda(device)
+            t0 = time.time()
+            Phi_train_eval = model.forward(X_train, Z_train)
+            Phi_test_eval = model.forward(X_test, Z_test)
+            sync_if_cuda(device)
+            eval_forward_time = time.time() - t0
+
+            # Fresh beta solve for updated/projected Q.
+            sync_if_cuda(device)
+            t0 = time.time()
+            beta_eval = model.solve_beta(Phi_train_eval, Y_train)
+            sync_if_cuda(device)
+            eval_solve_beta_time = time.time() - t0
+
+            # Loss/accuracy reporting.
+            sync_if_cuda(device)
+            t0 = time.time()
+
+            train_scores = Phi_train_eval @ beta_eval
+            test_scores = Phi_test_eval @ beta_eval
+
+            train_loss = F.mse_loss(train_scores, Y_train).item()
+            test_loss = F.mse_loss(test_scores, Y_test).item()
+
+            train_acc = classification_accuracy_from_scores(
+                train_scores,
+                y_train_labels,
+            )
+            test_acc = classification_accuracy_from_scores(
+                test_scores,
+                y_test_labels,
+            )
+
+            model.beta = beta_eval
+
+            sync_if_cuda(device)
+            eval_pred_time = time.time() - t0
+
+        sync_if_cuda(device)
+        eval_total_time = time.time() - eval_start
+
         sync_if_cuda(device)
         epoch_time = time.time() - epoch_start
         total_elapsed_time = time.time() - total_start
 
-        measured_time = (
-            forward_time
-            + solve_beta_time
-            + pred_loss_time
+        train_component_time = (
+            train_forward_time
+            + train_solve_beta_time
+            + train_pred_loss_time
             + backward_time
             + optimizer_time
-            + eval_time
+        )
+
+        measured_time = (
+            train_component_time
+            + eval_forward_time
+            + eval_solve_beta_time
+            + eval_pred_time
         )
 
         other_time = max(epoch_time - measured_time, 0.0)
 
+        # This is the main "training time excluding evaluation" number.
+        train_step_time = max(epoch_time - eval_total_time, 0.0)
+
+        train_other_time = max(
+            train_step_time - train_component_time,
+            0.0,
+        )
+
         epoch_times.append(epoch_time)
+        train_step_times.append(train_step_time)
+        eval_total_times.append(eval_total_time)
+
         avg_epoch_time = sum(epoch_times) / len(epoch_times)
+        avg_train_step_time = sum(train_step_times) / len(train_step_times)
+        avg_eval_total_time = sum(eval_total_times) / len(eval_total_times)
 
         history["epoch"].append(epoch)
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
         history["test_loss"].append(test_loss)
         history["test_acc"].append(test_acc)
+
         history["epoch_time"].append(epoch_time)
         history["avg_epoch_time"].append(avg_epoch_time)
+        history["train_step_time"].append(train_step_time)
+        history["avg_train_step_time"].append(avg_train_step_time)
+        history["eval_total_time"].append(eval_total_time)
+        history["avg_eval_total_time"].append(avg_eval_total_time)
         history["total_elapsed_time"].append(total_elapsed_time)
-        history["forward_time"].append(forward_time)
-        history["solve_beta_time"].append(solve_beta_time)
-        history["pred_loss_time"].append(pred_loss_time)
+
+        history["train_forward_time"].append(train_forward_time)
+        history["train_solve_beta_time"].append(train_solve_beta_time)
+        history["train_pred_loss_time"].append(train_pred_loss_time)
         history["backward_time"].append(backward_time)
         history["optimizer_time"].append(optimizer_time)
-        history["eval_time"].append(eval_time)
+        history["train_other_time"].append(train_other_time)
+
+        history["eval_forward_time"].append(eval_forward_time)
+        history["eval_solve_beta_time"].append(eval_solve_beta_time)
+        history["eval_pred_time"].append(eval_pred_time)
+
+        # Old aliases.
+        history["forward_time"].append(train_forward_time)
+        history["solve_beta_time"].append(train_solve_beta_time)
+        history["pred_loss_time"].append(train_pred_loss_time)
+        history["eval_time"].append(eval_total_time)
         history["other_time"].append(other_time)
 
         print(
@@ -493,18 +608,28 @@ def train_rvfl_profiled(
             f"Epoch {epoch}/{epochs} | "
             f"train_acc={train_acc:.4f} | "
             f"test_acc={test_acc:.4f} | "
-            f"epoch_time={epoch_time:.2f}s | "
-            f"avg_epoch_time={avg_epoch_time:.2f}s"
+            f"epoch_wall={epoch_time:.3f}s | "
+            f"train_step={train_step_time:.3f}s | "
+            f"eval={eval_total_time:.3f}s | "
+            f"avg_train_step={avg_train_step_time:.3f}s"
         )
 
         print(
-            f"Profile | "
-            f"forward={forward_time:.3f}s | "
-            f"solve_beta={solve_beta_time:.3f}s | "
-            f"pred_loss={pred_loss_time:.3f}s | "
+            f"Train profile | "
+            f"forward={train_forward_time:.3f}s | "
+            f"solve_beta={train_solve_beta_time:.3f}s | "
+            f"pred_loss={train_pred_loss_time:.3f}s | "
             f"backward={backward_time:.3f}s | "
             f"optimizer={optimizer_time:.3f}s | "
-            f"eval={eval_time:.3f}s | "
+            f"train_other={train_other_time:.3f}s | "
+        )
+
+        print(
+            f"Eval profile | "
+            f"eval_forward={eval_forward_time:.3f}s | "
+            f"eval_solve_beta={eval_solve_beta_time:.3f}s | "
+            f"eval_pred={eval_pred_time:.3f}s | "
+            f"eval_total={eval_total_time:.3f}s | "
             f"other={other_time:.3f}s"
         )
 
@@ -518,13 +643,50 @@ def train_rvfl_profiled(
         "lambda": lamb,
         "ortho_method": ortho_method,
         "setup_time": setup_time,
-        "final_eval_time": 0.0,
+
         "final_train_loss": history["train_loss"][-1],
         "final_test_loss": history["test_loss"][-1],
         "final_train_acc": history["train_acc"][-1],
         "final_test_acc": history["test_acc"][-1],
+
+        # Full benchmark wall-clock time.
         "avg_epoch_time": sum(history["epoch_time"]) / len(history["epoch_time"]),
         "total_training_time": total_training_time,
+
+        # Training-only time, excluding post-update evaluation.
+        "avg_train_step_time": (
+            sum(history["train_step_time"]) / len(history["train_step_time"])
+        ),
+        "total_train_step_time": sum(history["train_step_time"]),
+
+        # Evaluation-only time.
+        "avg_eval_total_time": (
+            sum(history["eval_total_time"]) / len(history["eval_total_time"])
+        ),
+        "total_eval_time": sum(history["eval_total_time"]),
+        "avg_eval_solve_beta_time": (
+            sum(history["eval_solve_beta_time"])
+            / len(history["eval_solve_beta_time"])
+        ),
+
+        # Component averages.
+        "avg_train_forward_time": (
+            sum(history["train_forward_time"]) / len(history["train_forward_time"])
+        ),
+        "avg_train_solve_beta_time": (
+            sum(history["train_solve_beta_time"])
+            / len(history["train_solve_beta_time"])
+        ),
+        "avg_train_pred_loss_time": (
+            sum(history["train_pred_loss_time"])
+            / len(history["train_pred_loss_time"])
+        ),
+        "avg_backward_time": (
+            sum(history["backward_time"]) / len(history["backward_time"])
+        ),
+        "avg_optimizer_time": (
+            sum(history["optimizer_time"]) / len(history["optimizer_time"])
+        ),
     }
 
     return history, summary

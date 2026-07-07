@@ -1,0 +1,16 @@
+#!/bin/bash -l
+
+#$ -P f-dmrg
+#$ -cwd
+#$ -j y
+#$ -o qsub_logs
+#$ -m n
+#$ -l h_rt=00:05:00
+
+set -euo pipefail
+
+cd "$SGE_O_WORKDIR"
+
+echo "All benchmark arrays finished at $(date)" | mail -s "RVFL benchmark sweep finished" shahyadk@bu.edu
+
+echo "Sent completion email."
