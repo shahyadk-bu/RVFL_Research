@@ -10,6 +10,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+# Make CUDA float32 math closer to CPU float32.
+# This matters for RVFL Gram matrices / ridge solves / QR updates.
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
 
 # ---------------------------------------------------------------------
 # Make imports work from the inner repo root and from the outer folder.
@@ -34,8 +40,14 @@ from RVFL_Research.Unitary_Model.Model.utils import (
 
 
 def sync_if_cuda(device):
-    if str(device).startswith("cuda"):
+    if isinstance(device, torch.device):
+        is_cuda = device.type == "cuda"
+    else:
+        is_cuda = str(device).startswith("cuda")
+
+    if is_cuda:
         torch.cuda.synchronize()
+
 
 
 def set_seed(seed):
@@ -756,9 +768,6 @@ def main():
         device = "cpu"
 
     dtype = torch.float32 if args.dtype == "float32" else torch.float64
-
-    if hasattr(torch, "set_float32_matmul_precision"):
-        torch.set_float32_matmul_precision("high")
 
     print("=" * 80)
     print(f"Dataset: {args.dataset}")
