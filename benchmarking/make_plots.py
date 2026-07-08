@@ -50,6 +50,10 @@ def load_all_results(result_root):
     return summary_df, history_df
 
 
+def lr_to_tag(lr):
+    return str(lr).replace(".", "p").replace("-", "m")
+
+
 def plot_individual_accuracy_curves(history_df, plot_root):
     out_dir = Path(plot_root) / "accuracy_curves"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -58,9 +62,9 @@ def plot_individual_accuracy_curves(history_df, plot_root):
         print("No history data found. Skipping accuracy plots.")
         return
 
-    groups = history_df.groupby(["dataset", "model", "width"])
+    groups = history_df.groupby(["dataset", "model", "width", "lr"])
 
-    for (dataset, model, width), df in groups:
+    for (dataset, model, width, lr), df in groups:
         df = df.sort_values("epoch")
 
         plt.figure(figsize=(8, 5))
@@ -81,21 +85,21 @@ def plot_individual_accuracy_curves(history_df, plot_root):
 
         plt.xlabel("Epoch")
         plt.ylabel("Accuracy")
-        plt.title(f"{model} on {dataset}, width={width}")
+        plt.title(f"{model} on {dataset}, width={width}, lr={lr:g}")
         plt.grid(True, alpha=0.3)
         plt.legend()
         plt.tight_layout()
 
-        filename = f"accuracy_{dataset}_{model}_width{width}.png"
+        filename = (
+            f"accuracy_{dataset}_{model}_width{width}_lr{lr_to_tag(lr)}.png"
+        )
         plt.savefig(out_dir / filename, dpi=200)
         plt.close()
 
 
 def plot_test_accuracy_by_width(history_df, plot_root):
     """
-    Optional aggregate plot:
-    For each dataset/model pair, plot test accuracy vs epoch for every width.
-    This is useful for quickly seeing which widths learn fastest.
+    For each dataset/model/lr triple, plot test accuracy vs epoch for every width.
     """
 
     out_dir = Path(plot_root) / "test_accuracy_by_width"
@@ -104,9 +108,9 @@ def plot_test_accuracy_by_width(history_df, plot_root):
     if history_df.empty:
         return
 
-    groups = history_df.groupby(["dataset", "model"])
+    groups = history_df.groupby(["dataset", "model", "lr"])
 
-    for (dataset, model), df_group in groups:
+    for (dataset, model, lr), df_group in groups:
         plt.figure(figsize=(9, 6))
 
         for width, df in df_group.groupby("width"):
@@ -120,12 +124,14 @@ def plot_test_accuracy_by_width(history_df, plot_root):
 
         plt.xlabel("Epoch")
         plt.ylabel("Test accuracy")
-        plt.title(f"Test accuracy by width: {model} on {dataset}")
+        plt.title(f"Test accuracy by width: {model} on {dataset}, lr={lr:g}")
         plt.grid(True, alpha=0.3)
         plt.legend()
         plt.tight_layout()
 
-        filename = f"test_accuracy_by_width_{dataset}_{model}.png"
+        filename = (
+            f"test_accuracy_by_width_{dataset}_{model}_lr{lr_to_tag(lr)}.png"
+        )
         plt.savefig(out_dir / filename, dpi=200)
         plt.close()
 
