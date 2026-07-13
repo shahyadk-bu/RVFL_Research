@@ -1,0 +1,4 @@
+dataset,model,link_option,architecture_family,architecture,depth,seed,lr,lambda,scalings,total_hidden_units,design_dim,unitary_parameter_count,qr_cost_proxy,final_train_acc,final_test_acc,avg_epoch_time,avg_train_step_time,avg_projection_time,total_training_time
+mnist,rvfl,multi,unspecified,20x15,2,0,0.003,0.01,"[0.0, 0.0]",35,819,625,11375,0.9990000128746033,0.7250000238418579,0.13145017623901367,0.10066282749176025,0.009062528610229492,0.2801041603088379
+mnist,rvfl,direct,unspecified,12x12x12x12x12,5,0,0.003,0.01,"[0.0, 0.0, 0.0, 0.0, 0.0]",60,796,720,8640,0.9990000128746033,0.7200000286102295,0.05742001533508301,0.04131817817687988,0.0023119449615478516,0.06026458740234375
+mnist,standard_nn,,unspecified,20x15,2,0,0.003,,,35,15,625,11375,0.2160000056028366,0.20000000298023224,0.03329634666442871,,,0.06720948219299316
